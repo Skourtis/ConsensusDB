@@ -1,49 +1,52 @@
 ---
 title: "Sorting POI on Go-terms PPI"
-output: html_notebook
+output: html_document
 params:  
-  Go-Term:
+  Annotations:
     label: "Go-Terms:"
-    value: Go_terms.xlsx
+    value: GO_OI.xlsx
     input: file
-  data: 
+  Type:
+    label: "Go-Terms:"
+    value: Total
+    choices: [Total, Slim]
+  Data: 
     label: "Input dataset:"
-    value: results.xlsx
+    value: POI.xlsx
     input: file
 ---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
 ```{r library_loading, include=FALSE}
 ##pacman is like a package for package management
 
-install.packages("pacman")
+install.packages("pacman", repos = 'http://cran.us.r-project.org')
 library('pacman')
 
+devtools::install_github("jimhester/archive")
 ### installing other packages
 pacman::p_load_gh("krlmlr/here")
-pacman::p_load("readr","tidyverse", "openxlsx", "stringr", "ontologyIndex", "biomaRt", 'here',"data.table","BiocManager")
+pacman::p_load("readr","tidyverse", "openxlsx", "stringr", "ontologyIndex", "biomaRt",
+               "data.table","BiocManager","devtools", "archive", "shiny")
 
 #needed for readGAF, and GoAnnotations, installable through BiocManager
-BiocManagerlibraries <- c("mgsa","GO.db","biomaRt","clusterProfiler","pathview","wordcloud")
+BiocManagerlibraries <- c("biomaRt","clusterProfiler","pathview","org.Hs.eg.db")
 
 for (i in BiocManagerlibraries){
 if (!requireNamespace(i, quietly = TRUE))
     BiocManager::install(i)
-    library(i)
+    library(i, character.only = T )
 }
-
-
-####_______ loading library human for ClusterProfiler________####
-organism = "org.Hs.eg.db"
-#BiocManager::install(organism, character.only = TRUE)
-library(organism, character.only = TRUE)
-####_______ loading library human for ClusterProfiler________####
-
-#sets wd in current location
-file_location <- here()
-setwd(file_location)
 ```
 
 ```{r file loading and pre-processing, include=FALSE}
-GO_annotations <- read.xlsx("./../Project_Datasets/GO_annotations.xlsx")
+#GO_annotations <- read.xlsx("./../Project_Datasets/GO_annotations.xlsx")
+
+###unzips the .7z and loads it
+Human_Proteins <- archive_read("./../Project_Datasets/HUMAN_9606_idmapping.7z")%>% read_tsv(col_names = FALSE) %>% 
+  setNames(c("Uniprot", "Type", "Value"))
 
 #loads all the consensusDB, keeps high confidence and NA and limits complexes to size 5
 #this ensures that a protein isn't getting a lot of GO terms from a single complex
@@ -53,18 +56,23 @@ ConsensusDB_PPI <- read_tsv("./../Project_Datasets/ConsensusPathDB_human_PPI") %
 
 #list of all interactors
 ConsensusDB_PPIs <- sapply(ConsensusDB_PPI$interaction_participants, function(x) str_split(x, pattern = ","))
-Human_Proteins <- read_tsv("./../Project_Datasets/HUMAN_9606_idmapping.dat", col_names = FALSE) %>% 
-  setNames(c("Uniprot", "Type", "Value"))
+# Human_Proteins <- read_tsv("./../Project_Datasets/HUMAN_9606_idmapping.dat", col_names = FALSE) %>%
+#  setNames(c("Uniprot", "Type", "Value"))
 ```
 
 ```{r Converting Input}
 #### ______________ Input_file_name_____############
-Go_terms_OI_test <- read.xlsx(params$Go-Term, colNames = F)$X1
-POI_list_test <- read.xlsx(params$Go-Term, colNames = F)$X1
+##user_input
+Go_terms_OI <- read.xlsx(params$Annotations, colNames = F)$X1
+POI_list <- read.xlsx(params$Data, colNames = F)$X1
+gm_attribute_input <- if_else(params$Type == "Total", "go_id", "goslim_goa_accession")
+
+#direct_input
+# POI_list <- read.xlsx("./../Project_Datasets/POIS.xlsx", colNames = F)$X1
+# Go_terms_OI <- read.xlsx("./../Project_Datasets/Go_terms_OI.xlsx", colNames = F)$X1
+# gm_attribute_input <- "go_ids"
 
 
-POI_list <- read.xlsx("./../Project_Datasets/POIS.xlsx", colNames = F)$X1
-Go_terms_OI <- read.xlsx("./../Project_Datasets/Go_terms_OI_Laura1.xlsx", colNames = F)$X1
 
 Uniprot_Conversion <- function(x){
   All_uniprots <- table(Human_Proteins$Uniprot[Human_Proteins$Value == x]) 
@@ -88,14 +96,12 @@ Converted <- left_join(Converted,filter(Human_Proteins,
 
 
 ```{r Getting Go terms and producing Output}
-
-
-mart <- useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl", "useast")
+mart <- useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
 
 ### finding the number of hits for all Go-terms of interest together for each protein in the list
 POI_Go_detection <- function(x){
   print(x)
-  results <- getBM(attributes = "go_id", filters = "uniprotswissprot",
+  results <- getBM(attributes = gm_attribute_input, filters = "uniprotswissprot",
            values = x, mart = mart)
   mean(str_count(results$go_id, paste(Go_terms_OI,collapse = "|")), na.rm = T)
 
@@ -103,13 +109,9 @@ POI_Go_detection <- function(x){
 
 j <- 1
 while(j <= nrow(Converted)){
-    for(i in j:nrow(Converted)){
-      print(i)
-  try(Converted$GO_POI[i] <- POI_Go_detection(Converted$Uniprot[i]))->doStuffResults
-  }
-    if(class(doStuffResults) != "try-error") i <- i + 1
+    try(Converted$GO_POI[j] <- POI_Go_detection(Converted$Uniprot[j]))->doStuffResults
+    if(class(doStuffResults) != "try-error") j <- j + 1
 }
-write.xlsx(Converted,"test.xlsx")
 
 if(nrow(Converted)>500){
   Converted <- Converted[with(Converted,order(GO_POI,decreasing = T)),]%>%
@@ -129,10 +131,10 @@ PP_Go_detection <- function(x){
   
   Uniprots_PPI2 <- Human_Proteins$Uniprot[Human_Proteins$Value %in% PPI2s]
   
-  results_1 <- getBM(attributes = "go_id", filters = "uniprotswissprot",
+  results_1 <- getBM(attributes = gm_attribute_input, filters = "uniprotswissprot",
            values = Uniprots_PPI1, mart = mart)
   
-  results_2 <- getBM(attributes = "go_id", filters = "uniprotswissprot",
+  results_2 <- getBM(attributes = gm_attribute_input, filters = "uniprotswissprot",
            values = Uniprots_PPI2, mart = mart)
   
   data.table(Value = x, PPI1 = list(PPI1s),
@@ -169,7 +171,6 @@ for (i in Converted$Value[(count):nrow(Converted)]){
   }
 }
 
-
 Converted <- left_join(Converted,PP_detected, by = "Value")
 Converted <- left_join(Converted,Human_Proteins[Human_Proteins$Type == "GeneID",c(1,3)],  by = 'Uniprot')
 
@@ -184,18 +185,16 @@ Converted <-
   left_join(Converted,by =c("uniprotswissprot" = "Uniprot"))
 
 Converted <- Converted[with(Converted,order(GO_POI,Go_count_PPI1,Go_count_PPI2, decreasing = T)),]
-                            
+
 for (i in 1:10){
   if (length(unlist(Converted$PPI1_gene_ids[i]))<10){
     print("smaller than 10")
   }
   else{
     write.xlsx(clusterProfiler::enrichGO(gene= unlist(Converted$PPI1_gene_ids[i]),OrgDb='org.Hs.eg.db',qvalueCutoff = 0.05)@result,
-    paste0("./Project_Output/PPI1_",Converted$Name_provided[i],".xlsx"))
+    paste0("./../Project_Output/PPI1_",Converted$Name_provided[i],".xlsx"))
   }
 }
 
-write.xlsx(Converted[,-c(4,11:13)],"./Project_Output/POIs_Laura_sorted.xlsx")
-
-
+write.xlsx(Converted[,-c(4,11:13)],"./../Project_Output/POIs_sorted.xlsx")
 ```
