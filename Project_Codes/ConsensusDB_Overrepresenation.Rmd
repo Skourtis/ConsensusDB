@@ -1,7 +1,9 @@
 ---
-title: "Sorting POI on Go-terms PPI"
-output: html_document
-params:  
+output:
+  html_document:
+    df_print: tibble
+params:
+  Set_Title: "Insert Report Title here"
   Annotations:
     label: "Go-Terms:"
     value: GO_OI.xlsx
@@ -14,11 +16,14 @@ params:
     label: "Input dataset:"
     value: POI.xlsx
     input: file
+title: "`r params$set_title`"
 ---
+
+
+
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
-
 ```{r library_loading, include=FALSE}
 ##pacman is like a package for package management
 
@@ -29,7 +34,7 @@ devtools::install_github("jimhester/archive")
 ### installing other packages
 pacman::p_load_gh("krlmlr/here")
 pacman::p_load("readr","tidyverse", "openxlsx", "stringr", "ontologyIndex", "biomaRt",
-               "data.table","BiocManager","devtools", "archive", "shiny")
+               "data.table","BiocManager","devtools", "archive", "shiny","DT")
 
 #needed for readGAF, and GoAnnotations, installable through BiocManager
 BiocManagerlibraries <- c("biomaRt","clusterProfiler","pathview","org.Hs.eg.db")
@@ -42,6 +47,7 @@ if (!requireNamespace(i, quietly = TRUE))
 ```
 
 ```{r file loading and pre-processing, include=FALSE}
+#here::set_here()
 #GO_annotations <- read.xlsx("./../Project_Datasets/GO_annotations.xlsx")
 
 ###unzips the .7z and loads it
@@ -60,17 +66,17 @@ ConsensusDB_PPIs <- sapply(ConsensusDB_PPI$interaction_participants, function(x)
 #  setNames(c("Uniprot", "Type", "Value"))
 ```
 
-```{r Converting Input}
+```{r Converting Input, include=FALSE}
 #### ______________ Input_file_name_____############
 ##user_input
-Go_terms_OI <- read.xlsx(params$Annotations, colNames = F)$X1
-POI_list <- read.xlsx(params$Data, colNames = F)$X1
-gm_attribute_input <- if_else(params$Type == "Total", "go_id", "goslim_goa_accession")
+# Go_terms_OI <- read.xlsx(params$Annotations, colNames = F)$X1
+# POI_list <- read.xlsx(params$Data, colNames = F)$X1
+# gm_attribute_input <- if_else(params$Type == "Total", "go_id", "goslim_goa_accession")
 
 #direct_input
-# POI_list <- read.xlsx("./../Project_Datasets/POIS.xlsx", colNames = F)$X1
-# Go_terms_OI <- read.xlsx("./../Project_Datasets/Go_terms_OI.xlsx", colNames = F)$X1
-# gm_attribute_input <- "go_ids"
+POI_list <- read.xlsx("./../Project_Datasets/POIS.xlsx", colNames = F)$X1
+Go_terms_OI <- read.xlsx("./../Project_Datasets/Go_terms_OI.xlsx", colNames = F)$X1
+gm_attribute_input <- "goslim_goa_accession"
 
 
 
@@ -93,24 +99,32 @@ Converted <- left_join(Converted,filter(Human_Proteins,
 
 ```
 
-
-
-```{r Getting Go terms and producing Output}
+```{r Getting Go terms and producing Output, include=FALSE}
 mart <- useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
 
 ### finding the number of hits for all Go-terms of interest together for each protein in the list
 POI_Go_detection <- function(x){
   print(x)
-  results <- getBM(attributes = gm_attribute_input, filters = "uniprotswissprot",
+  results <- getBM(attributes = gm_attribute_input , filters = "uniprotswissprot",
            values = x, mart = mart)
-  mean(str_count(results$go_id, paste(Go_terms_OI,collapse = "|")), na.rm = T)
-
-}
+  list(counts =
+  mean(str_count(results[,1], paste(c(Go_terms_OI,"GO:0005623"),collapse = "|")), na.rm = T),
+  matched_terms = 
+  Filter(length,str_extract_all(results[,1],paste(Go_terms_OI,collapse = "|")))%>% 
+           unlist()
+  )
+  }
+Converted$GO_POI <- NA
+Converted$POI_Go_found <- NA
 
 j <- 1
 while(j <= nrow(Converted)){
-    try(Converted$GO_POI[j] <- POI_Go_detection(Converted$Uniprot[j]))->doStuffResults
-    if(class(doStuffResults) != "try-error") j <- j + 1
+    try(Go_terms_found <- POI_Go_detection(Converted$Uniprot[j]))->doStuffResults
+    if(class(doStuffResults) != "try-error"){
+      Converted$GO_POI[j] <- Go_terms_found$counts
+      j <- j + 1
+      if(!is_empty(Go_terms_found$matched_terms)) Converted$POI_Go_found[j] <- Go_terms_found$matched_terms
+      }
 }
 
 if(nrow(Converted)>500){
@@ -138,9 +152,9 @@ PP_Go_detection <- function(x){
            values = Uniprots_PPI2, mart = mart)
   
   data.table(Value = x, PPI1 = list(PPI1s),
-             Go_count_PPI1 = mean(str_count(results_1$go_id, paste(Go_terms_OI,collapse = "|")), na.rm=T),
+             Go_count_PPI1 = mean(str_count(results_1[,1], paste(Go_terms_OI,collapse = "|")), na.rm=T),
              PPI2 = list(PPI2s), 
-             Go_count_PPI2 = mean(str_count(results_2$go_id, paste(Go_terms_OI,collapse = "|")), na.rm =T))
+             Go_count_PPI2 = mean(str_count(results_2[,1], paste(Go_terms_OI,collapse = "|")), na.rm =T))
 }
 
 
@@ -198,3 +212,8 @@ for (i in 1:10){
 
 write.xlsx(Converted[,-c(4,11:13)],"./../Project_Output/POIs_sorted.xlsx")
 ```
+
+```{r output_table, results='asis'}
+DT::DT(Converted)
+```
+
