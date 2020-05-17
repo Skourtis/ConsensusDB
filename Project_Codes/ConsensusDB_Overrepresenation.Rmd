@@ -34,7 +34,7 @@ devtools::install_github("jimhester/archive")
 ### installing other packages
 pacman::p_load_gh("krlmlr/here")
 pacman::p_load("readr","tidyverse", "openxlsx", "stringr", "ontologyIndex", "biomaRt",
-               "data.table","BiocManager","devtools", "archive", "shiny","DT")
+               "data.table","BiocManager","devtools", "archive", "shiny","DT", "RCurl")
 
 #needed for readGAF, and GoAnnotations, installable through BiocManager
 BiocManagerlibraries <- c("biomaRt","clusterProfiler","pathview","org.Hs.eg.db")
@@ -106,7 +106,7 @@ mart <- useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
 POI_Go_detection <- function(x){
   print(x)
   results <- getBM(attributes = gm_attribute_input , filters = "uniprotswissprot",
-           values = x, mart = mart)
+           values = x, mart = mart, curl=curlHandle)
   list(counts =
   mean(str_count(results[,1], paste(c(Go_terms_OI,"GO:0005623"),collapse = "|")), na.rm = T),
   matched_terms = 
@@ -116,7 +116,7 @@ POI_Go_detection <- function(x){
   }
 Converted$GO_POI <- NA
 Converted$POI_Go_found <- NA
-
+curlHandle <- getCurlHandle()
 j <- 1
 while(j <= nrow(Converted)){
     try(Go_terms_found <- POI_Go_detection(Converted$Uniprot[j]))->doStuffResults
@@ -146,10 +146,10 @@ PP_Go_detection <- function(x){
   Uniprots_PPI2 <- Human_Proteins$Uniprot[Human_Proteins$Value %in% PPI2s]
   
   results_1 <- getBM(attributes = gm_attribute_input, filters = "uniprotswissprot",
-           values = Uniprots_PPI1, mart = mart)
+           values = Uniprots_PPI1, mart = mart, curl=curlHandle)
   
   results_2 <- getBM(attributes = gm_attribute_input, filters = "uniprotswissprot",
-           values = Uniprots_PPI2, mart = mart)
+           values = Uniprots_PPI2, mart = mart, curl=curlHandle)
   
   data.table(Value = x, PPI1 = list(PPI1s),
              Go_count_PPI1 = mean(str_count(results_1[,1], paste(Go_terms_OI,collapse = "|")), na.rm=T),
