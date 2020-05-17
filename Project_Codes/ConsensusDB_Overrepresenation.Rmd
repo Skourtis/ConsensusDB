@@ -209,8 +209,10 @@ for (i in 1:10){
     paste0("./../Project_Output/PPI1_",Converted$Name_provided[i],".xlsx"))
   }
 }
+columns_of_interest <- c("uniprotswissprot", "description", "Name_provided", "GO_POI", "POI_Go_found", "PPI1", "Go_count_PPI1", "PPI2", "Go_count_PPI2") 
 
-write.xlsx(Converted[,-c(4,11:13)],"./../Project_Output/POIs_sorted.xlsx")
+
+write.xlsx(Converted[,columns_of_interest],"./../Project_Output/POIs_sorted.xlsx")
 ```
 
 ```{r output_table, results='asis'}
