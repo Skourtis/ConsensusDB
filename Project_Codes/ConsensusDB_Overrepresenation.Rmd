@@ -1,7 +1,6 @@
 ---
-output:
-  html_document:
-    df_print: tibble
+output: 
+  html_document
 params:
   Set_Title: "Insert Report Title here"
   Annotations:
@@ -25,19 +24,20 @@ title: "`r params$set_title`"
 knitr::opts_chunk$set(echo = TRUE)
 ```
 ```{r library_loading, include=FALSE}
+
 ##pacman is like a package for package management
 
-install.packages("pacman", repos = 'http://cran.us.r-project.org')
-library('pacman')
+if (!require("pacman")) install.packages("pacman", repos = 'http://cran.us.r-project.org')
+library(pacman)
+
+### installing other packages
+pacman::p_load_gh("krlmlr/here" ,  dependencies = TRUE)
+pacman::p_load("readr","tidyverse", "openxlsx", "stringr", "ontologyIndex", "biomaRt",
+               "data.table","BiocManager","devtools", "shiny","DT", "RCurl", update = FALSE)
 
 devtools::install_github("jimhester/archive")
-### installing other packages
-pacman::p_load_gh("krlmlr/here")
-pacman::p_load("readr","tidyverse", "openxlsx", "stringr", "ontologyIndex", "biomaRt",
-               "data.table","BiocManager","devtools", "archive", "shiny","DT", "RCurl")
-
 #needed for readGAF, and GoAnnotations, installable through BiocManager
-BiocManagerlibraries <- c("biomaRt","clusterProfiler","pathview","org.Hs.eg.db")
+BiocManagerlibraries <- c("biomaRt","org.Hs.eg.db") #"clusterProfiler","pathview",
 
 for (i in BiocManagerlibraries){
 if (!requireNamespace(i, quietly = TRUE))
@@ -47,18 +47,24 @@ if (!requireNamespace(i, quietly = TRUE))
 ```
 
 ```{r file loading and pre-processing, include=FALSE}
+
 #here::set_here()
 #GO_annotations <- read.xlsx("./../Project_Datasets/GO_annotations.xlsx")
 
 ###unzips the .7z and loads it
-Human_Proteins <- archive_read("./../Project_Datasets/HUMAN_9606_idmapping.7z")%>% read_tsv(col_names = FALSE) %>% 
+Human_Proteins <- archive::archive_read("./../Project_Datasets/HUMAN_9606_idmapping.7z")%>% read_tsv(col_names = FALSE) %>% 
   setNames(c("Uniprot", "Type", "Value"))
 
-#loads all the consensusDB, keeps high confidence and NA and limits complexes to size 5
+#15.01.2019    ConsensusPathDB version 34 has been released.
+#loads all the consensusDB, keeps high confidence and NA and penalises complexes 1/n
 #this ensures that a protein isn't getting a lot of GO terms from a single complex
 ConsensusDB_PPI <- read_tsv("./../Project_Datasets/ConsensusPathDB_human_PPI") %>% 
-  filter(interaction_confidence>0.5 | is.na(interaction_confidence)) %>%
-  filter(str_count(.$interaction_participants,",")<6)
+  dplyr::filter((interaction_confidence>0.5 | is.na(interaction_confidence)) & str_detect(.$interaction_participants,",")) 
+ 
+ConsensusDB_PPI$interaction_confidence[is.na(ConsensusDB_PPI$interaction_confidence)] <- ConsensusDB_PPI$interaction_participants[is.na(ConsensusDB_PPI$interaction_confidence)] %>%
+  str_count(pattern = ",") %>% (function(x) 1/(x-1))
+
+ConsensusDB_PPI <- ConsensusDB_PPI[!(ConsensusDB_PPI$interaction_confidence == Inf),]
 
 #list of all interactors
 ConsensusDB_PPIs <- sapply(ConsensusDB_PPI$interaction_participants, function(x) str_split(x, pattern = ","))
@@ -68,15 +74,18 @@ ConsensusDB_PPIs <- sapply(ConsensusDB_PPI$interaction_participants, function(x)
 
 ```{r Converting Input, include=FALSE}
 #### ______________ Input_file_name_____############
-##user_input
-# Go_terms_OI <- read.xlsx(params$Annotations, colNames = F)$X1
-# POI_list <- read.xlsx(params$Data, colNames = F)$X1
-# gm_attribute_input <- if_else(params$Type == "Total", "go_id", "goslim_goa_accession")
-
 #direct_input
-POI_list <- read.xlsx("./../Project_Datasets/POIS.xlsx", colNames = F)$X1
-Go_terms_OI <- read.xlsx("./../Project_Datasets/Go_terms_OI.xlsx", colNames = F)$X1
-gm_attribute_input <- "goslim_goa_accession"
+# POI_list <- read.xlsx("./../Project_Datasets/POIS.xlsx", colNames = F)$X1
+# Go_terms_OI <- read.xlsx("./../Project_Datasets/Go_terms_OI.xlsx", colNames = F)$X1 %>% append("GO:0005634")
+# gm_attribute_input <- "go_id"
+# gm_second_attribute_input <- "name_1006"
+
+##user_input
+Go_terms_OI <- read.xlsx(params$Annotations, colNames = F)$X1
+POI_list <- read.xlsx(params$Data, colNames = F)$X1
+gm_attribute_input <- if_else(params$Type == "Total", "go_id", "goslim_goa_accession")
+gm_second_attribute_input <- if_else(params$Type == "Total", "name_1006", "goslim_goa_description")
+
 
 
 
@@ -91,39 +100,43 @@ Converted <- data.frame(Name_provided = names(Converted),
                              Uniprot = as.character(Converted),
                              stringsAsFactors = F)
 
-Converted <- left_join(Converted,filter(Human_Proteins, 
+Converted <- dplyr::left_join(Converted,dplyr::filter(Human_Proteins, 
                                         Human_Proteins$Uniprot %in% Converted$Uniprot &
                                         Human_Proteins$Type == "UniProtKB-ID"), 
-                       by = "Uniprot") %>% drop_na()
+                       by = "Uniprot") %>% tidyr::drop_na()
 
 
 ```
 
 ```{r Getting Go terms and producing Output, include=FALSE}
-mart <- useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+mart <- try(useMart(biomart = "ensembl", dataset = "hsapiens_gene_ensembl"))
 
+###getHandleRcurl https://csbi.ltdk.helsinki.fi/meap/anduril/doc/components/BiomartAnnotator/BiomartAnnotator.r
 ### finding the number of hits for all Go-terms of interest together for each protein in the list
 POI_Go_detection <- function(x){
   print(x)
-  results <- getBM(attributes = gm_attribute_input , filters = "uniprotswissprot",
-           values = x, mart = mart, curl=curlHandle)
+  results <- getBM(attributes = c(gm_attribute_input, "name_1006" ) , filters = "uniprotswissprot",
+           values = x , mart = mart, curl=curlHandle)
   list(counts =
-  mean(str_count(results[,1], paste(c(Go_terms_OI,"GO:0005623"),collapse = "|")), na.rm = T),
-  matched_terms = 
-  Filter(length,str_extract_all(results[,1],paste(Go_terms_OI,collapse = "|")))%>% 
-           unlist()
+  mean(str_count(results[,1], paste(Go_terms_OI,collapse = "|")), na.rm = T),
+  matched_terms = paste(results[results[,1] %in% Go_terms_OI,2], collapse = ",")
+  
   )
   }
 Converted$GO_POI <- NA
 Converted$POI_Go_found <- NA
 curlHandle <- getCurlHandle()
+
 j <- 1
 while(j <= nrow(Converted)){
     try(Go_terms_found <- POI_Go_detection(Converted$Uniprot[j]))->doStuffResults
     if(class(doStuffResults) != "try-error"){
       Converted$GO_POI[j] <- Go_terms_found$counts
+      print(Converted$Name_provided[j])
+      if(!rlang::is_empty(Go_terms_found$matched_terms)){
+        Converted[j , "POI_Go_found"][1] <- list(Go_terms_found$matched_terms)
+      }
       j <- j + 1
-      if(!is_empty(Go_terms_found$matched_terms)) Converted$POI_Go_found[j] <- Go_terms_found$matched_terms
       }
 }
 
@@ -132,49 +145,68 @@ if(nrow(Converted)>500){
     .[1:500,]
 }
 
+# Counting_Go_terms_OI <- function(getBM_results, Partner_swissport){
+#   ID <- Human_Proteins$Value[Human_Proteins$Type == "UniProtKB-ID" & Human_Proteins$Uniprot == Partner_swissport]
+#   dplyr::filter(results_1, uniprotswissprot == "O00264")[,1]
+# }
+
 ### finding secondary interaction partners and their matching Goterms
 PP_Go_detection <- function(x){
+  x = Converted$Value[3]
   print(x)
-  PPI1s <- str_subset(ConsensusDB_PPI$interaction_participants, pattern = x) %>%
-    str_split(pattern = ",")  %>% unlist() %>% unique() %>% .[. != x]
+  Protein_ConsensusDB_PPI <-  subset(ConsensusDB_PPI, str_detect(ConsensusDB_PPI$interaction_participants, pattern = x))
+  PPI1s <- Protein_ConsensusDB_PPI$interaction_participants %>% str_split(pattern = ",")  %>% unlist() %>% unique() %>% .[. != x]
   
-  Uniprots_PPI1 <- Human_Proteins$Uniprot[Human_Proteins$Value %in% PPI1s]
+  Uniprots_PPI1 <- Human_Proteins[Human_Proteins$Value %in% PPI1s, -2]
   
   PPI2s <- str_subset(ConsensusDB_PPI$interaction_participants, pattern = paste(PPI1s,collapse="|")) %>%
     str_split(pattern = ",")  %>% unlist() %>% unique() %>% .[!(. %in% PPI1s)]
   
-  Uniprots_PPI2 <- Human_Proteins$Uniprot[Human_Proteins$Value %in% PPI2s]
+  Uniprots_PPI2 <- Human_Proteins[Human_Proteins$Value %in% PPI2s, -2]
   
-  results_1 <- getBM(attributes = gm_attribute_input, filters = "uniprotswissprot",
-           values = Uniprots_PPI1, mart = mart, curl=curlHandle)
+  results_1 <- getBM(attributes = c(gm_attribute_input, gm_second_attribute_input ,'uniprotswissprot'), filters = "uniprotswissprot",
+           values = Uniprots_PPI1$Uniprot , mart = mart, curl=curlHandle)
   
-  results_2 <- getBM(attributes = gm_attribute_input, filters = "uniprotswissprot",
-           values = Uniprots_PPI2, mart = mart, curl=curlHandle)
+  results_2 <- getBM(attributes = c(gm_attribute_input, gm_second_attribute_input ,"uniprotswissprot"), filters = "uniprotswissprot",
+           values = Uniprots_PPI2$Uniprot, mart = mart, curl=curlHandle)
   
-  data.table(Value = x, PPI1 = list(PPI1s),
-             Go_count_PPI1 = mean(str_count(results_1[,1], paste(Go_terms_OI,collapse = "|")), na.rm=T),
-             PPI2 = list(PPI2s), 
-             Go_count_PPI2 = mean(str_count(results_2[,1], paste(Go_terms_OI,collapse = "|")), na.rm =T))
+  
+  #### Creates nested df for each Partner and calcuates the percentage of Go hits out of all go terms for each protein
+  results_1 <- results_1 %>% nest(data = -uniprotswissprot) %>% 
+    dplyr::left_join(Human_Proteins[Human_Proteins$Type == "UniProtKB-ID", -2], by = c("uniprotswissprot" = "Uniprot")) %>%
+    mutate(count = sapply(.$data, function(x) mean(unlist(x) %in% Go_terms_OI, na.rm = T)))
+  
+  results_2 <- results_2 %>% nest(data = -uniprotswissprot) %>% 
+    dplyr::left_join(Human_Proteins[Human_Proteins$Type == "UniProtKB-ID", -2], by = c("uniprotswissprot" = "Uniprot")) %>%
+    mutate(count = sapply(.$data, function(x) mean(unlist(x) %in% Go_terms_OI, na.rm = T)))
+  
+  
+  PPI1 <-    data.table(Value = x, Partners = PPI1s, PP_Type = "Primary") %>% left_join(results_1, by = c("Partners" = "Value"))
+  PPI2 <-    data.table(Value = x, Partners = PPI2s, PP_Type = "Secondary") %>% left_join(results_2, by = c("Partners" = "Value"))
+  
+  
+  #### retrieves mean confidence for each partnter
+  PPI1$Confidence <-  sapply(PPI1$Partners, function(x) mean(Protein_ConsensusDB_PPI$interaction_confidence[str_detect(Protein_ConsensusDB_PPI$interaction_participants, x)],
+                                                 na.rm = T), simplify = T)
+  
+  PPI_primary_confidence <- ConsensusDB_PPI[str_detect(ConsensusDB_PPI$interaction_participants, paste(PPI1$Parterns,collapse = "|")),3:4]
+  PPI2$Confidence <-  as.vector(sapply(PPI2$Partners, function(x) mean(PPI_primary_confidence$interaction_confidence[str_detect(PPI_primary_confidence$interaction_participants, x)],na.rm = T)/50, simplify = T))
+  
+  combined_PPI1_PPI2 <- rbind(PPI1, PPI2)  %>%
+    mutate(Adjusted_hits = count*Confidence )
 }
-
-
-
-#empty df for the output
-PP_detected <- data.table(Value = character(nrow(Converted)), 
-                          PPI1 = list(nrow(Converted)), 
-                          Go_count_PPI1 = numeric(nrow(Converted)),
-                          PPI2 = list(nrow(Converted)), 
-                          Go_count_PPI2 = numeric(nrow(Converted)))
-
+Converted$Partners <- NA
+Converted$PPI_rank <- NA
 ### find the number of partners and their Go-terms, and the number of match
 count <- 1
 for (i in Converted$Value[(count):nrow(Converted)]){
   n <- 0
   while(n<5){
    print(count)
-   df <- try(PP_Go_detection(i), silent=TRUE)
-   PP_detected[count] <- df
+   df <- try(PP_Go_detection(Converted$Value[3]), silent=TRUE)
   if(!is(df, 'try-error')){
+    Converted[count,"Partners"][[1]] <- list(df)
+    Converted$PPI_rank[count] <- sum(Converted[count,"Partners"][[1]]$Adjusted_hits, na.rm = T)
     count <- count+1
     break
   }
@@ -184,38 +216,135 @@ for (i in Converted$Value[(count):nrow(Converted)]){
    }
   }
 }
+#PP_detected$Normalised_Count <- PP_detected$Go_count*
+#Converted <- dplyr::left_join(Converted,PP_detected %>% nest(data = -Value), by = "Value")
+#Converted <- dplyr::left_join(Converted,Human_Proteins[Human_Proteins$Type == "GeneID",c(1,3)],  by = 'Uniprot')
 
-Converted <- left_join(Converted,PP_detected, by = "Value")
-Converted <- left_join(Converted,Human_Proteins[Human_Proteins$Type == "GeneID",c(1,3)],  by = 'Uniprot')
-
-for (i in 1:nrow(Converted)){
-  Uniprots <- Human_Proteins$Uniprot[Human_Proteins$Value %in% Converted$PPI1[[i]]] 
-  Converted$PPI1_gene_ids[i] <- list(Human_Proteins$Value[Human_Proteins$Uniprot %in% Uniprots & Human_Proteins$Type == "GeneID"])
-}
+# for (i in 1:nrow(Converted)){
+#   Uniprots <- Human_Proteins$Uniprot[Human_Proteins$Value %in% Converted$PPI1[[i]]] 
+#   Converted$PPI1_gene_ids[i] <- list(Human_Proteins$Value[Human_Proteins$Uniprot %in% Uniprots & Human_Proteins$Type == "GeneID"])
+# }
 
 Converted <- 
   getBM(attributes=c('uniprotswissprot','description'), filters = 'uniprotswissprot',
         values = Converted$Uniprot, mart =mart) %>%
-  left_join(Converted,by =c("uniprotswissprot" = "Uniprot"))
+  dplyr::left_join(Converted,by =c("uniprotswissprot" = "Uniprot"))
 
-Converted <- Converted[with(Converted,order(GO_POI,Go_count_PPI1,Go_count_PPI2, decreasing = T)),]
+Converted <- Converted[with(Converted,order(GO_POI,PPI_rank, decreasing = T)),]
 
-for (i in 1:10){
-  if (length(unlist(Converted$PPI1_gene_ids[i]))<10){
-    print("smaller than 10")
-  }
-  else{
-    write.xlsx(clusterProfiler::enrichGO(gene= unlist(Converted$PPI1_gene_ids[i]),OrgDb='org.Hs.eg.db',qvalueCutoff = 0.05)@result,
-    paste0("./../Project_Output/PPI1_",Converted$Name_provided[i],".xlsx"))
-  }
-}
-columns_of_interest <- c("uniprotswissprot", "description", "Name_provided", "GO_POI", "POI_Go_found", "PPI1", "Go_count_PPI1", "PPI2", "Go_count_PPI2") 
+columns_of_interest <- c("uniprotswissprot", "description", "Name_provided", "GO_POI","POI_Go_found", "Value", "PPI_rank") 
 
+saveRDS(Converted, file = "./../Project_Output/Nested_Final_Ouput.rds")
 
 write.xlsx(Converted[,columns_of_interest],"./../Project_Output/POIs_sorted.xlsx")
 ```
 
-```{r output_table, results='asis'}
-DT::DT(Converted)
+```{r}
+DT::datatable(Converted)
+
 ```
+
+<button class="btn btn-primary" data-toggle="collapse" data-target="#BlockName"> `r Converted$Value[1]` </button>  
+<div id="BlockName" class="collapse">
+
+
+```{r}
+DT::datatable(Converted[1, "Partners"][[1]])
+
+```
+
+</div>
+
+<button class="btn btn-primary" data-toggle="collapse" data-target="#BlockName1"> `r Converted$Value[2]` </button>  
+<div id="BlockName1" class="collapse"> 
+
+
+```{r}
+DT::datatable(Converted[2, "Partners"][[1]])
+```
+
+</div>
+
+<button class="btn btn-primary" data-toggle="collapse" data-target="#BlockName2"> `r Converted$Value[3]` </button>  
+    <div id="BlockName2" class="collapse">  
+
+
+```{r}
+DT::datatable(Converted[3, "Partners"][[1]])
+```
+
+</div>
+<button class="btn btn-primary" data-toggle="collapse" data-target="#BlockName3"> `r Converted$Value[4]` </button>  
+<div id="BlockName3" class="collapse">
+
+
+```{r}
+DT::datatable(Converted[4, "Partners"][[1]])
+
+```
+
+</div>
+
+<button class="btn btn-primary" data-toggle="collapse" data-target="#BlockName4"> `r Converted$Value[5]` </button>  
+<div id="BlockName4" class="collapse"> 
+
+
+
+
+```{r}
+DT::datatable(Converted[5, "Partners"][[1]])
+```
+
+</div>
+
+<button class="btn btn-primary" data-toggle="collapse" data-target="#BlockName5"> `r Converted$Value[6]` </button>  
+    <div id="BlockName5" class="collapse">  
+
+
+```{r}
+DT::datatable(Converted[6, "Partners"][[1]])
+```
+
+</div>
+<button class="btn btn-primary" data-toggle="collapse" data-target="#BlockName6"> `r Converted$Value[7]` </button>  
+<div id="BlockName6" class="collapse">
+
+
+```{r}
+DT::datatable(Converted[7, "Partners"][[1]])
+
+```
+
+</div>
+
+<button class="btn btn-primary" data-toggle="collapse" data-target="#BlockName7"> `r Converted$Value[8]` </button>  
+<div id="BlockName7" class="collapse"> 
+
+
+
+
+```{r}
+DT::datatable(Converted[8, "Partners"][[1]])
+```
+
+</div>
+
+<button class="btn btn-primary" data-toggle="collapse" data-target="#BlockName8"> `r Converted$Value[9]` </button>  
+    <div id="BlockName8" class="collapse">  
+
+
+```{r}
+DT::datatable(Converted[9, "Partners"][[1]])
+```
+
+</div>
+<button class="btn btn-primary" data-toggle="collapse" data-target="#BlockName9"> `r Converted$Value[10]` </button>  
+    <div id="BlockName9" class="collapse">  
+
+
+```{r}
+DT::datatable(Converted[10, "Partners"][[1]])
+```
+
+</div>
 
