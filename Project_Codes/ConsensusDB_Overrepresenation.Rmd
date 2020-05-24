@@ -30,6 +30,10 @@ knitr::opts_chunk$set(echo = TRUE)
 if (!require("pacman")) install.packages("pacman", repos = 'http://cran.us.r-project.org')
 library(pacman)
 
+#https://miktex.org/download
+#if (!require("packrat")) install.packages("packrat", repos = 'http://cran.us.r-project.org')
+#library(packrat)
+
 ### installing other packages
 pacman::p_load_gh("krlmlr/here" ,  dependencies = TRUE)
 pacman::p_load("readr","tidyverse", "openxlsx", "stringr", "ontologyIndex", "biomaRt",
@@ -75,16 +79,16 @@ ConsensusDB_PPIs <- sapply(ConsensusDB_PPI$interaction_participants, function(x)
 ```{r Converting Input, include=FALSE}
 #### ______________ Input_file_name_____############
 #direct_input
-# POI_list <- read.xlsx("./../Project_Datasets/POIS.xlsx", colNames = F)$X1
-# Go_terms_OI <- read.xlsx("./../Project_Datasets/Go_terms_OI.xlsx", colNames = F)$X1 %>% append("GO:0005634")
-# gm_attribute_input <- "go_id"
-# gm_second_attribute_input <- "name_1006"
+POI_list <- read.xlsx("./../Project_Datasets/POIS.xlsx", colNames = F)$X1
+Go_terms_OI <- read.xlsx("./../Project_Datasets/Go_terms_OI.xlsx", colNames = F)$X1 %>% append("GO:0005634")
+gm_attribute_input <- "go_id"
+gm_second_attribute_input <- "name_1006"
 
 ##user_input
-Go_terms_OI <- read.xlsx(params$Annotations, colNames = F)$X1
-POI_list <- read.xlsx(params$Data, colNames = F)$X1
-gm_attribute_input <- if_else(params$Type == "Total", "go_id", "goslim_goa_accession")
-gm_second_attribute_input <- if_else(params$Type == "Total", "name_1006", "goslim_goa_description")
+# Go_terms_OI <- read.xlsx(params$Annotations, colNames = F)$X1
+# POI_list <- read.xlsx(params$Data, colNames = F)$X1
+# gm_attribute_input <- if_else(params$Type == "Total", "go_id", "goslim_goa_accession")
+# gm_second_attribute_input <- if_else(params$Type == "Total", "name_1006", "goslim_goa_description")
 
 
 
@@ -119,12 +123,14 @@ POI_Go_detection <- function(x){
            values = x , mart = mart, curl=curlHandle)
   list(counts =
   mean(str_count(results[,1], paste(Go_terms_OI,collapse = "|")), na.rm = T),
+  all_terms = results,
   matched_terms = paste(results[results[,1] %in% Go_terms_OI,2], collapse = ",")
   
   )
   }
 Converted$GO_POI <- NA
 Converted$POI_Go_found <- NA
+Converted$All_Go <- NA
 curlHandle <- getCurlHandle()
 
 j <- 1
@@ -135,6 +141,7 @@ while(j <= nrow(Converted)){
       print(Converted$Name_provided[j])
       if(!rlang::is_empty(Go_terms_found$matched_terms)){
         Converted[j , "POI_Go_found"][1] <- list(Go_terms_found$matched_terms)
+        Converted[j , "All_Go"][[1]] <- list(Go_terms_found$all_terms)
       }
       j <- j + 1
       }
@@ -152,7 +159,7 @@ if(nrow(Converted)>500){
 
 ### finding secondary interaction partners and their matching Goterms
 PP_Go_detection <- function(x){
-  x = Converted$Value[3]
+  #x = Converted$Value[3]
   print(x)
   Protein_ConsensusDB_PPI <-  subset(ConsensusDB_PPI, str_detect(ConsensusDB_PPI$interaction_participants, pattern = x))
   PPI1s <- Protein_ConsensusDB_PPI$interaction_participants %>% str_split(pattern = ",")  %>% unlist() %>% unique() %>% .[. != x]
@@ -203,7 +210,7 @@ for (i in Converted$Value[(count):nrow(Converted)]){
   n <- 0
   while(n<5){
    print(count)
-   df <- try(PP_Go_detection(Converted$Value[3]), silent=TRUE)
+   df <- try(PP_Go_detection(Converted$Value[i]), silent=TRUE)
   if(!is(df, 'try-error')){
     Converted[count,"Partners"][[1]] <- list(df)
     Converted$PPI_rank[count] <- sum(Converted[count,"Partners"][[1]]$Adjusted_hits, na.rm = T)
@@ -233,14 +240,25 @@ Converted <-
 Converted <- Converted[with(Converted,order(GO_POI,PPI_rank, decreasing = T)),]
 
 columns_of_interest <- c("uniprotswissprot", "description", "Name_provided", "GO_POI","POI_Go_found", "Value", "PPI_rank") 
+Converted_noPartners <- Converted[,columns_of_interest]
 
 saveRDS(Converted, file = "./../Project_Output/Nested_Final_Ouput.rds")
 
-write.xlsx(Converted[,columns_of_interest],"./../Project_Output/POIs_sorted.xlsx")
+
+list_POI_Go <- Converted$All_Go
+names(list_POI_Go) <- Converted$Value
+
+write.xlsx(list_POI_Go,"./../Project_Output/POIs_All_GOs.xlsx")
+
+list_Partners_Go <- Converted$Partners
+names(list_Partners_Go) <- Converted$Value
+
+write.xlsx(list_Partners_Go,"./../Project_Output/POI_PPIs.xlsx")
+write.xlsx(Converted_noPartners,"./../Project_Output/POIs_sorted.xlsx")
 ```
 
 ```{r}
-DT::datatable(Converted)
+DT::datatable(Converted_noPartners)
 
 ```
 
@@ -249,7 +267,7 @@ DT::datatable(Converted)
 
 
 ```{r}
-DT::datatable(Converted[1, "Partners"][[1]])
+DT::datatable(Converted[1, "Partners"][[1]][,-5])
 
 ```
 
@@ -260,26 +278,27 @@ DT::datatable(Converted[1, "Partners"][[1]])
 
 
 ```{r}
-DT::datatable(Converted[2, "Partners"][[1]])
+DT::datatable(Converted[2, "Partners"][[1]][,-5])
 ```
 
 </div>
 
 <button class="btn btn-primary" data-toggle="collapse" data-target="#BlockName2"> `r Converted$Value[3]` </button>  
-    <div id="BlockName2" class="collapse">  
+<div id="BlockName2" class="collapse">  
 
 
 ```{r}
-DT::datatable(Converted[3, "Partners"][[1]])
+DT::datatable(Converted[3, "Partners"][[1]][,-5])
 ```
 
 </div>
+
 <button class="btn btn-primary" data-toggle="collapse" data-target="#BlockName3"> `r Converted$Value[4]` </button>  
 <div id="BlockName3" class="collapse">
 
 
 ```{r}
-DT::datatable(Converted[4, "Partners"][[1]])
+DT::datatable(Converted[4, "Partners"][[1]][,-5])
 
 ```
 
@@ -289,29 +308,28 @@ DT::datatable(Converted[4, "Partners"][[1]])
 <div id="BlockName4" class="collapse"> 
 
 
-
-
 ```{r}
-DT::datatable(Converted[5, "Partners"][[1]])
+DT::datatable(Converted[5, "Partners"][[1]][,-5])
 ```
 
 </div>
 
 <button class="btn btn-primary" data-toggle="collapse" data-target="#BlockName5"> `r Converted$Value[6]` </button>  
-    <div id="BlockName5" class="collapse">  
+<div id="BlockName5" class="collapse">  
 
 
 ```{r}
-DT::datatable(Converted[6, "Partners"][[1]])
+DT::datatable(Converted[6, "Partners"][[1]][,-5])
 ```
 
 </div>
+
 <button class="btn btn-primary" data-toggle="collapse" data-target="#BlockName6"> `r Converted$Value[7]` </button>  
 <div id="BlockName6" class="collapse">
 
 
 ```{r}
-DT::datatable(Converted[7, "Partners"][[1]])
+DT::datatable(Converted[7, "Partners"][[1]][,-5])
 
 ```
 
@@ -324,26 +342,27 @@ DT::datatable(Converted[7, "Partners"][[1]])
 
 
 ```{r}
-DT::datatable(Converted[8, "Partners"][[1]])
+DT::datatable(Converted[8, "Partners"][[1]][,-5])
 ```
 
 </div>
 
 <button class="btn btn-primary" data-toggle="collapse" data-target="#BlockName8"> `r Converted$Value[9]` </button>  
-    <div id="BlockName8" class="collapse">  
+<div id="BlockName8" class="collapse">  
 
 
 ```{r}
-DT::datatable(Converted[9, "Partners"][[1]])
+DT::datatable(Converted[9, "Partners"][[1]][,-5])
 ```
 
 </div>
+
 <button class="btn btn-primary" data-toggle="collapse" data-target="#BlockName9"> `r Converted$Value[10]` </button>  
-    <div id="BlockName9" class="collapse">  
+<div id="BlockName9" class="collapse">  
 
 
 ```{r}
-DT::datatable(Converted[10, "Partners"][[1]])
+DT::datatable(Converted[10, "Partners"][[1]][,-5])
 ```
 
 </div>
