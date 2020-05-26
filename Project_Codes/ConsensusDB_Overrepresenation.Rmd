@@ -210,7 +210,7 @@ for (i in Converted$Value[(count):nrow(Converted)]){
   n <- 0
   while(n<5){
    print(count)
-   df <- try(PP_Go_detection(Converted$Value[i]), silent=TRUE)
+   df <- try(PP_Go_detection(Converted$Value[count]), silent=TRUE)
   if(!is(df, 'try-error')){
     Converted[count,"Partners"][[1]] <- list(df)
     Converted$PPI_rank[count] <- sum(Converted[count,"Partners"][[1]]$Adjusted_hits, na.rm = T)
