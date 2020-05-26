@@ -79,16 +79,16 @@ ConsensusDB_PPIs <- sapply(ConsensusDB_PPI$interaction_participants, function(x)
 ```{r Converting Input, include=FALSE}
 #### ______________ Input_file_name_____############
 #direct_input
-POI_list <- read.xlsx("./../Project_Datasets/POIS.xlsx", colNames = F)$X1
-Go_terms_OI <- read.xlsx("./../Project_Datasets/Go_terms_OI.xlsx", colNames = F)$X1 %>% append("GO:0005634")
-gm_attribute_input <- "go_id"
-gm_second_attribute_input <- "name_1006"
+# POI_list <- read.xlsx("./../Project_Datasets/POIS.xlsx", colNames = F)$X1
+# Go_terms_OI <- read.xlsx("./../Project_Datasets/Go_terms_OI.xlsx", colNames = F)$X1 %>% append("GO:0005634")
+# gm_attribute_input <- "go_id"
+# gm_second_attribute_input <- "name_1006"
 
 ##user_input
-# Go_terms_OI <- read.xlsx(params$Annotations, colNames = F)$X1
-# POI_list <- read.xlsx(params$Data, colNames = F)$X1
-# gm_attribute_input <- if_else(params$Type == "Total", "go_id", "goslim_goa_accession")
-# gm_second_attribute_input <- if_else(params$Type == "Total", "name_1006", "goslim_goa_description")
+Go_terms_OI <- read.xlsx(params$Annotations, colNames = F)$X1
+POI_list <- read.xlsx(params$Data, colNames = F)$X1
+gm_attribute_input <- if_else(params$Type == "Total", "go_id", "goslim_goa_accession")
+gm_second_attribute_input <- if_else(params$Type == "Total", "name_1006", "goslim_goa_description")
 
 
 
