@@ -1,5 +1,9 @@
 Input files:
 
+Go-terms of interest: From the GO_annotations.xlsx (or Slim_Go.xlsx - in Project_Datasets), copy the go terms you are interested in into Go_terms_OI.xlsx and replace the defaults.
+Proteins of interest: In POI.xlsx replace the default protein names with your own proteins that you want to rank (It accepts any type of protein name, e.g. AACS,SPCS_HUMAN,P21796 are all recognised 
+
+
 Should be added as in the examples in the Dataset Folder
 code is:
 POI_list <- read.xlsx("./../Project_Datasets/POIS.xlsx", colNames = F)
