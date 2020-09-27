@@ -37,9 +37,9 @@ library(pacman)
 ### installing other packages
 pacman::p_load_gh("krlmlr/here" ,  dependencies = TRUE)
 pacman::p_load("readr","tidyverse", "openxlsx", "stringr", "ontologyIndex", "biomaRt",
-               "data.table","BiocManager","devtools", "shiny","DT", "RCurl", update = FALSE)
+               "data.table","BiocManager","devtools", "shiny","DT", "RCurl", "glue", "jsonlite",update = FALSE)
 
-devtools::install_github("jimhester/archive")
+
 #needed for readGAF, and GoAnnotations, installable through BiocManager
 BiocManagerlibraries <- c("biomaRt","org.Hs.eg.db") #"clusterProfiler","pathview",
 
@@ -56,8 +56,8 @@ if (!requireNamespace(i, quietly = TRUE))
 #GO_annotations <- read.xlsx("./../Project_Datasets/GO_annotations.xlsx")
 
 ###unzips the .7z and loads it
-Human_Proteins <- archive::archive_read("./../Project_Datasets/HUMAN_9606_idmapping.7z")%>% read_tsv(col_names = FALSE) %>% 
-  setNames(c("Uniprot", "Type", "Value"))
+unzip("./../Project_Datasets/HUMAN_9606_idmapping_original.zip", exdir = "./../Project_Datasets")
+Human_Proteins <- read_tsv("./../Project_Datasets/HUMAN_9606_idmapping_original.dat",col_names = FALSE)%>%   setNames(c("Uniprot", "Type", "Value"))
 
 #15.01.2019    ConsensusPathDB version 34 has been released.
 #loads all the consensusDB, keeps high confidence and NA and penalises complexes 1/n
@@ -188,8 +188,8 @@ PP_Go_detection <- function(x){
     dplyr::mutate(count = sapply(.$data, function(x) mean(unlist(x) %in% Go_terms_OI, na.rm = T)))
   
   
-  PPI1 <-    data.table(Value = x, Partners = PPI1s, PP_Type = "Primary") %>% dplyr::left_join((results_1, by = c("Partners" = "Value"))
-  PPI2 <-    data.table(Value = x, Partners = PPI2s, PP_Type = "Secondary") %>% dplyr::left_join((results_2, by = c("Partners" = "Value"))
+  PPI1 <-    data.table(Value = x, Partners = PPI1s, PP_Type = "Primary") %>% dplyr::left_join(results_1, by = c("Partners" = "Value"))
+  PPI2 <-    data.table(Value = x, Partners = PPI2s, PP_Type = "Secondary") %>% dplyr::left_join(results_2, by = c("Partners" = "Value"))
   
   
   #### retrieves mean confidence for each partnter
